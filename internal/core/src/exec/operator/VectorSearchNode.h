@@ -56,9 +56,9 @@ class PhyVectorSearchNode : public Operator {
     }
 
     void
-    AddInput(RowVectorPtr& input) override;
+    AddInput(OperatorOutputPtr& input) override;
 
-    RowVectorPtr
+    OperatorOutputPtr
     GetOutput() override;
 
     bool

@@ -81,11 +81,11 @@ PhyVectorSearchNode::PhyVectorSearchNode(
 }
 
 void
-PhyVectorSearchNode::AddInput(RowVectorPtr& input) {
+PhyVectorSearchNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyVectorSearchNode::GetOutput() {
     milvus::exec::checkCancellation(query_context_);
 
@@ -149,10 +149,9 @@ PhyVectorSearchNode::GetOutput() {
         // already does this.  We only need to do it here for the iterative
         // path or when ElementFilterBitsNode is not present.
         if (ph.element_level_ && !query_context_->bitset_is_element_level()) {
-            auto col_input = GetColumnVector(input_);
-            TargetBitmapView view(col_input->GetRawData(), col_input->size());
-            TargetBitmapView valid_view(col_input->GetValidRawData(),
-                                        col_input->size());
+            auto col_input = OutputCast<NullableBitmap>(input_);
+            auto view = col_input->Data()->view();
+            auto valid_view = col_input->Validity()->view();
 
             auto [element_bitset, valid_element_bitset] =
                 struct_element_offsets->RowBitsetToElementBitset(
@@ -165,15 +164,13 @@ PhyVectorSearchNode::GetOutput() {
                 return input_;
             }
 
-            std::vector<VectorPtr> col_res;
-            col_res.push_back(std::make_shared<ColumnVector>(
-                std::move(element_bitset), std::move(valid_element_bitset)));
-            input_ = std::make_shared<RowVector>(std::move(col_res));
+            input_ = std::make_shared<NullableBitmap>(
+                std::move(element_bitset), std::move(valid_element_bitset));
             query_context_->set_bitset_is_element_level(true);
         }
 
-        auto col_input = GetColumnVector(input_);
-        TargetBitmapView view(col_input->GetRawData(), col_input->size());
+        auto col_input = OutputCast<NullableBitmap>(input_);
+        auto view = col_input->Data()->view();
 
         if (view.all()) {
             auto search_result = empty_search_result(num_queries);
@@ -184,7 +181,7 @@ PhyVectorSearchNode::GetOutput() {
         }
 
         // TODO: uniform knowhere BitsetView and milvus BitsetView
-        search_view = milvus::BitsetView((uint8_t*)col_input->GetRawData(),
+        search_view = milvus::BitsetView((uint8_t*)col_input->Data()->view().data(),
                                          col_input->size());
         data_cnt = search_view.size();
     }
@@ -193,7 +190,7 @@ PhyVectorSearchNode::GetOutput() {
     milvus::SearchResult search_result;
     if (query::CanUseStrictGroupSearch(search_info_, num_queries) &&
         !search_view.empty()) {
-        search_result.vector_search_filter_owner_ = GetColumnVector(input_);
+        search_result.vector_search_filter_owner_ = OutputCast<NullableBitmap>(input_);
     }
     auto op_context = query_context_->get_op_context();
     segment_->vector_search(search_info_,

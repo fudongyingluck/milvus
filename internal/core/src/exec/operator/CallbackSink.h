@@ -25,17 +25,17 @@ class CallbackSink : public Operator {
     CallbackSink(
         int32_t operator_id,
         DriverContext* ctx,
-        std::function<BlockingReason(RowVectorPtr, ContinueFuture*)> callback)
+        std::function<BlockingReason(OperatorOutputPtr, ContinueFuture*)> callback)
         : Operator(ctx, RowType::None, operator_id, "N/A", "CallbackSink"),
           callback_(callback) {
     }
 
     void
-    AddInput(RowVectorPtr& input) override {
+    AddInput(OperatorOutputPtr& input) override {
         blocking_reason_ = callback_(input, &future_);
     }
 
-    RowVectorPtr
+    OperatorOutputPtr
     GetOutput() override {
         return nullptr;
     }
@@ -87,7 +87,7 @@ class CallbackSink : public Operator {
 
     ContinueFuture future_;
     BlockingReason blocking_reason_{BlockingReason::kNotBlocked};
-    std::function<BlockingReason(RowVectorPtr, ContinueFuture*)> callback_;
+    std::function<BlockingReason(OperatorOutputPtr, ContinueFuture*)> callback_;
 };
 
 }  // namespace exec

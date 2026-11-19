@@ -63,11 +63,11 @@ PhyIterativeElementFilterNode::PhyIterativeElementFilterNode(
 }
 
 void
-PhyIterativeElementFilterNode::AddInput(RowVectorPtr& input) {
+PhyIterativeElementFilterNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyIterativeElementFilterNode::GetOutput() {
     if (is_finished_ || !no_more_input_) {
         return nullptr;

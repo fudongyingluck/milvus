@@ -39,9 +39,9 @@ class PhyProjectNode : public Operator {
     }
 
     void
-    AddInput(RowVectorPtr& input) override;
+    AddInput(OperatorOutputPtr& input) override;
 
-    RowVectorPtr
+    OperatorOutputPtr
     GetOutput() override;
 
     // ProjectNode is a stateless pass-through operator: it transforms input

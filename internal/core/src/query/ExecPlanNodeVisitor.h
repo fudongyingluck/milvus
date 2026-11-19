@@ -31,6 +31,7 @@
 #include "common/Types.h"
 #include "common/Vector.h"
 #include "exec/QueryContext.h"
+#include "common/OperatorOutput.h"
 #include "exec/expression/Utils.h"
 #include "plan/PlanNode.h"
 #include "query/PlanImpl.h"
@@ -176,13 +177,13 @@ class ExecPlanNodeVisitor : public PlanNodeVisitor {
         return enable_expr_cache_;
     }
 
-    static RowVectorPtr
+    static OperatorOutputPtr
     ExecuteTask(plan::PlanFragment& plan,
                 std::shared_ptr<milvus::exec::QueryContext> query_context);
 
     void
     setupRetrieveResult(
-        const RowVectorPtr& result,
+        const OperatorOutputPtr& result,
         const OpContext& op_context,
         const RetrievePlanNode& node,
         RetrieveResult& tmp_retrieve_result,
@@ -245,13 +246,9 @@ ExecuteQueryExprImpl(std::shared_ptr<milvus::plan::PlanNode> plannode,
     }
     auto row = ExecPlanNodeVisitor::ExecuteTask(plan_fragment, query_context);
     AssertInfo(row != nullptr,
-               "ExecuteTask returned null row vector for query expression");
-    AssertInfo(
-        row->childrens().size() == 1,
-        "query expr operator's result vector's children size not equal one");
-    auto col_vec = milvus::query::GetColumnVectorForTest(row->childrens()[0]);
-    AssertInfo(col_vec != nullptr, "failed to cast to ColumnVector");
-    BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
+               "ExecuteTask returned null output for query expression");
+    AssertInfo(row->Kind() == OperatorOutputKind::Bitmap, "Expected bitmap query expression output");
+    auto view = OutputCast<NullableBitmap>(row)->Data()->view();
     BitsetType query_view(view);
     query_view.flip();
     return query_view;

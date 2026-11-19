@@ -79,7 +79,7 @@ PhyIterativeFilterNode::PhyIterativeFilterNode(
 }
 
 void
-PhyIterativeFilterNode::AddInput(RowVectorPtr& input) {
+PhyIterativeFilterNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
@@ -88,7 +88,7 @@ PhyIterativeFilterNode::IsFinished() {
     return is_finished_;
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyIterativeFilterNode::GetOutput() {
     milvus::exec::checkCancellation(query_context_);
 

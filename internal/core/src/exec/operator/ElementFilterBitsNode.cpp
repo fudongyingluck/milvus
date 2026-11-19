@@ -73,11 +73,11 @@ PhyElementFilterBitsNode::PhyElementFilterBitsNode(
 }
 
 void
-PhyElementFilterBitsNode::AddInput(RowVectorPtr& input) {
+PhyElementFilterBitsNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyElementFilterBitsNode::GetOutput() {
     if (is_finished_ || input_ == nullptr) {
         return nullptr;
@@ -113,17 +113,14 @@ PhyElementFilterBitsNode::GetOutput() {
         // non-empty filter and convert it if they need element-level input.
         TargetBitmap bitset(query_context_->get_active_count(), true);
         TargetBitmap valid_bitset(query_context_->get_active_count(), true);
-        std::vector<VectorPtr> col_res;
-        col_res.push_back(std::make_shared<ColumnVector>(
-            std::move(bitset), std::move(valid_bitset)));
-        return std::make_shared<RowVector>(std::move(col_res));
+        return std::make_shared<NullableBitmap>(
+            std::move(bitset), std::move(valid_bitset));
     }
 
     // Step 2: Prepare doc bitset
-    auto col_input = GetColumnVector(input_);
-    TargetBitmapView doc_bitset(col_input->GetRawData(), col_input->size());
-    TargetBitmapView doc_bitset_valid(col_input->GetValidRawData(),
-                                      col_input->size());
+    auto col_input = OutputCast<NullableBitmap>(input_);
+    auto doc_bitset = col_input->Data()->view();
+    auto doc_bitset_valid = col_input->Validity()->view();
     doc_bitset.flip();
 
     // Step 3: Evaluate element expression
@@ -154,10 +151,8 @@ PhyElementFilterBitsNode::GetOutput() {
         filtered_count,
         total_cost));
 
-    std::vector<VectorPtr> col_res;
-    col_res.push_back(std::make_shared<ColumnVector>(
-        std::move(expr_result), std::move(valid_expr_result)));
-    return std::make_shared<RowVector>(std::move(col_res));
+    return std::make_shared<NullableBitmap>(
+        std::move(expr_result), std::move(valid_expr_result));
 }
 
 std::pair<TargetBitmap, TargetBitmap>

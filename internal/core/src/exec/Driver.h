@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common/Promise.h"
+#include "common/OperatorOutput.h"
 #include "common/Vector.h"
 #include "exec/QueryContext.h"
 #include "plan/PlanNode.h"
@@ -183,7 +184,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
     static void
     Enqueue(std::shared_ptr<Driver> instance);
 
-    RowVectorPtr
+    OperatorOutputPtr
     Next(std::shared_ptr<BlockingState>& blocking_state);
 
     DriverContext*
@@ -222,7 +223,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
     StopReason
     RunInternal(std::shared_ptr<Driver>& self,
                 std::shared_ptr<BlockingState>& blocking_state,
-                RowVectorPtr& result);
+                OperatorOutputPtr& result);
 
     void
     PrefetchAsync();
@@ -246,7 +247,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
     std::once_flag once_;
 };
 
-using Consumer = std::function<BlockingReason(RowVectorPtr, ContinueFuture*)>;
+using Consumer = std::function<BlockingReason(OperatorOutputPtr, ContinueFuture*)>;
 using ConsumerSupplier = std::function<Consumer()>;
 class LocalPlanner {
  public:

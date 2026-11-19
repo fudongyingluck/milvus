@@ -129,18 +129,18 @@ PhyProjectNode::PhyProjectNode(
 }
 
 void
-PhyProjectNode::AddInput(milvus::RowVectorPtr& input) {
+PhyProjectNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyProjectNode::GetOutput() {
     if (is_finished_ || input_ == nullptr) {
         return nullptr;
     }
-    auto col_input = GetColumnVector(input_);
+    auto col_input = OutputCast<NullableBitmap>(input_);
     // raw data view
-    TargetBitmapView raw_data_view(col_input->GetRawData(), col_input->size());
+    auto raw_data_view = col_input->Data()->view();
 
     // When no fields need to be projected (e.g., count(*) only), count valid
     // logical rows directly from the bitmap.  For element-level bitmaps this is

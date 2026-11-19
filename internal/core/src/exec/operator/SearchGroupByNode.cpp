@@ -53,11 +53,11 @@ PhySearchGroupByNode::PhySearchGroupByNode(
 }
 
 void
-PhySearchGroupByNode::AddInput(RowVectorPtr& input) {
+PhySearchGroupByNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhySearchGroupByNode::GetOutput() {
     milvus::exec::checkCancellation(query_context_);
     if (is_finished_ || !no_more_input_) {

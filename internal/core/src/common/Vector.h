@@ -19,6 +19,8 @@
 #include <memory>
 
 #include "common/EasyAssert.h"
+#include "common/NullableBitmap.h"
+#include "common/OperatorOutput.h"
 #include "Types.h"
 #include "bitset/bitset.h"
 #include "common/FieldData.h"
@@ -128,13 +130,19 @@ class ColumnVector final : public SimpleVector {
     //    }
 
     // the size is the number of bits
-    // TODO: separate the usage of bitmap from scalar field data
+    // Legacy expression interface backed by NullableBitmap storage.
     ColumnVector(TargetBitmap&& bitmap, TargetBitmap&& valid_bitmap)
         : SimpleVector(DataType::INT8, bitmap.size()),
           is_bitmap_(true),
-          valid_values_(std::move(valid_bitmap)) {
-        values_ = std::make_shared<FieldBitsetImpl<uint8_t>>(DataType::INT8,
-                                                             std::move(bitmap));
+          bitmap_(std::make_shared<NullableBitmap>(
+              std::move(bitmap), std::move(valid_bitmap))) {
+    }
+
+    // Expression results and operator outputs share the same bitmap owner.
+    const NullableBitmapPtr&
+    GetBitmap() const {
+        AssertInfo(is_bitmap_, "Expected a bitmap ColumnVector");
+        return bitmap_;
     }
 
     ColumnVector(FieldDataPtr&& value,
@@ -179,51 +187,53 @@ class ColumnVector final : public SimpleVector {
     void
     SetValueAt(size_t index, const T& value) {
         AssertInfo(index < length_, "SetValueAt index out of range");
-        *(reinterpret_cast<T*>(values_->Data()) + index) = value;
+        *(reinterpret_cast<T*>(GetRawData()) + index) = value;
     }
 
     void
     nullAt(size_t index) {
         // Update null_count_ when setting a value to null
-        if (valid_values_[index]) {
+        if (ValidityBitmap()[index]) {
             // Was valid, now null: increment count
             null_count_ = null_count_.value_or(0) + 1;
         }
-        valid_values_.set(index, false);
+        ValidityBitmap().set(index, false);
     }
 
     void
     clearNullAt(size_t index) {
         // Update null_count_ when clearing a null value
-        if (!valid_values_[index]) {
+        if (!ValidityBitmap()[index]) {
             // Was null, now valid: decrement count
             if (null_count_.has_value()) {
                 null_count_ =
                     (null_count_.value() > 0) ? null_count_.value() - 1 : 0;
             }
         }
-        valid_values_.set(index, true);
+        ValidityBitmap().set(index, true);
     }
 
     bool
     ValidAt(size_t index) override {
-        return valid_values_[index];
+        return ValidityBitmap()[index];
     }
 
     void*
     GetRawData() const {
-        return values_->Data();
+        return is_bitmap_
+                   ? const_cast<TargetBitmap::data_type*>(bitmap_->Data()->data())
+                   : values_->Data();
     }
 
     void*
     GetValidRawData() {
-        return valid_values_.data();
+        return ValidityBitmap().data();
     }
 
     template <typename As>
     As*
     RawAsValues() const {
-        return reinterpret_cast<As*>(values_->Data());
+        return reinterpret_cast<As*>(GetRawData());
     }
 
     bool
@@ -276,6 +286,8 @@ class ColumnVector final : public SimpleVector {
 
     void
     append(const ColumnVector& other) {
+        AssertInfo(!is_bitmap_ && !other.is_bitmap_,
+                   "Bitmap results cannot be appended as scalar columns");
         // Validate that both vectors have the same type
         AssertInfo(type() == other.type(),
                    "Cannot append ColumnVector with different type: {} != {}",
@@ -336,9 +348,9 @@ class ColumnVector final : public SimpleVector {
         }
 
         const uint64_t* data =
-            reinterpret_cast<const uint64_t*>(values_->Data());
+            reinterpret_cast<const uint64_t*>(GetRawData());
         const uint64_t* valid =
-            reinterpret_cast<const uint64_t*>(valid_values_.data());
+            reinterpret_cast<const uint64_t*>(ValidityBitmap().data());
 
         const size_t num_full_words = len / 64;
         const size_t tail_bits = len % 64;
@@ -378,9 +390,9 @@ class ColumnVector final : public SimpleVector {
         }
 
         const uint64_t* data =
-            reinterpret_cast<const uint64_t*>(values_->Data());
+            reinterpret_cast<const uint64_t*>(GetRawData());
         const uint64_t* valid =
-            reinterpret_cast<const uint64_t*>(valid_values_.data());
+            reinterpret_cast<const uint64_t*>(ValidityBitmap().data());
 
         const size_t num_full_words = len / 64;
         const size_t tail_bits = len % 64;
@@ -409,7 +421,21 @@ class ColumnVector final : public SimpleVector {
     }
 
  private:
+    // Compatibility for the existing writable expression API. Read/write
+    // boundaries are unchanged by this output-container migration.
+    TargetBitmap&
+    ValidityBitmap() {
+        return is_bitmap_ ? *const_cast<TargetBitmap*>(bitmap_->Validity())
+                          : valid_values_;
+    }
+
+    const TargetBitmap&
+    ValidityBitmap() const {
+        return is_bitmap_ ? *bitmap_->Validity() : valid_values_;
+    }
+
     bool is_bitmap_;  // TODO: remove the field after implementing BitmapVector
+    NullableBitmapPtr bitmap_;
     FieldDataPtr values_;
     TargetBitmap valid_values_;  // false means the value is null
 };
@@ -463,8 +489,18 @@ class ConstantVector : public SimpleVector {
  * @brief Multi vectors for scalar types
  * mainly using it to pass internal result in segcore scalar engine system
  */
-class RowVector : public BaseVector {
+class RowVector : public BaseVector, public OperatorOutput {
  public:
+    size_t
+    size() const noexcept override {
+        return length_;
+    }
+
+    OperatorOutputKind
+    Kind() const noexcept override {
+        return OperatorOutputKind::Rows;
+    }
+
     RowVector(std::vector<DataType>& data_types,
               size_t length,
               std::optional<size_t> null_count = std::nullopt)

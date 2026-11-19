@@ -45,7 +45,7 @@ empty_search_result(int64_t num_queries, bool element_level = false) {
     return final_result;
 }
 
-RowVectorPtr
+OperatorOutputPtr
 ExecPlanNodeVisitor::ExecuteTask(
     plan::PlanFragment& plan,
     std::shared_ptr<milvus::exec::QueryContext> query_context) {
@@ -59,42 +59,42 @@ ExecPlanNodeVisitor::ExecuteTask(
 
     auto task =
         milvus::exec::Task::Create(DEFAULT_TASK_ID, plan, 0, query_context);
-    RowVectorPtr ret = nullptr;
+    OperatorOutputPtr ret = nullptr;
     int64_t processed_num = 0;
     for (;;) {
         auto result = task->Next();
         if (!result) {
-            if (ret && !ret->childrens().empty()) {
-                auto first_column =
-                    std::dynamic_pointer_cast<ColumnVector>(ret->child(0));
-                AssertInfo(first_column,
-                           "first column must be a column vector");
-                if (first_column->IsBitmap()) {
-                    if (query_context->bitset_is_element_level()) {
-                        Assert(processed_num ==
-                               query_context->get_active_element_count());
-                    } else {
-                        Assert(processed_num ==
-                               query_context->get_active_count());
-                    }
+            if (ret && ret->Kind() == OperatorOutputKind::Bitmap) {
+                if (query_context->bitset_is_element_level()) {
+                    Assert(processed_num ==
+                           query_context->get_active_element_count());
+                } else {
+                    Assert(processed_num == query_context->get_active_count());
                 }
             }
             break;
         }
         processed_num += result->size();
         if (ret) {
-            const auto& childrens = result->childrens();
-            AssertInfo(childrens.size() == ret->childrens().size(),
-                       "column count of row vectors in different rounds"
+            // Filter operators emit one complete bitmap; ordinary columns
+            // may arrive in multiple batches (e.g. sorting output).
+            AssertInfo(ret->Kind() == OperatorOutputKind::Rows &&
+                           result->Kind() == OperatorOutputKind::Rows,
+                       "Only ordinary columns can be emitted in batches");
+            const auto rows = OutputCast<RowVector>(result);
+            const auto ret_rows = OutputCast<RowVector>(ret);
+            const auto& childrens = rows->childrens();
+            AssertInfo(childrens.size() == ret_rows->childrens().size(),
+                       "column count of row vectors in different rounds "
                        "should be consistent, ret_column_count:{}, "
                        "new_result_column_count:{}",
-                       childrens.size(),
-                       ret->childrens().size());
+                       ret_rows->childrens().size(),
+                       childrens.size());
             for (auto i = 0; i < childrens.size(); i++) {
                 if (auto column_vec =
                         std::dynamic_pointer_cast<ColumnVector>(childrens[i])) {
                     auto ret_column_vector =
-                        std::dynamic_pointer_cast<ColumnVector>(ret->child(i));
+                        std::dynamic_pointer_cast<ColumnVector>(ret_rows->child(i));
                     ret_column_vector->append(*column_vec);
                 } else {
                     ThrowInfo(UnexpectedError, "expr return type not matched");
@@ -105,8 +105,10 @@ ExecPlanNodeVisitor::ExecuteTask(
         }
     }
     span.SetAttribute("total_rows", processed_num);
-    span.SetAttribute("matched_rows",
-                      ret ? processed_num - ret->nullCount() : 0);
+    const auto null_count = ret && ret->Kind() == OperatorOutputKind::Rows
+                                ? OutputCast<RowVector>(ret)->nullCount()
+                                : 0;
+    span.SetAttribute("matched_rows", ret ? processed_num - null_count : 0);
     return ret;
 }
 
@@ -301,7 +303,7 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
 
 void
 ExecPlanNodeVisitor::setupRetrieveResult(
-    const milvus::RowVectorPtr& result,
+    const OperatorOutputPtr& result,
     const OpContext& op_context,
     const RetrievePlanNode& node,
     RetrieveResult& tmp_retrieve_result,
@@ -325,15 +327,9 @@ ExecPlanNodeVisitor::setupRetrieveResult(
         retrieve_result_opt_ = std::move(tmp_retrieve_result);
         return;
     }
-    AssertInfo(!result->childrens().empty(),
-               "Result row vector must have at least one column");
-    auto first_column =
-        std::dynamic_pointer_cast<ColumnVector>(result->child(0));
-    AssertInfo(first_column,
-               "children inside row vector must be of column vector for now");
-    tmp_retrieve_result.total_data_cnt_ = first_column->size();
-    if (first_column->IsBitmap()) {
-        BitsetTypeView view(first_column->GetRawData(), first_column->size());
+    tmp_retrieve_result.total_data_cnt_ = result->size();
+    if (result->Kind() == OperatorOutputKind::Bitmap) {
+        auto view = OutputCast<NullableBitmap>(result)->Data()->view();
         if (query_context->bitset_is_element_level()) {
             // Element-level query: bitset is element-level, need to convert to (doc_id, element_index)
             tmp_retrieve_result.element_level_ = true;
@@ -392,13 +388,16 @@ ExecPlanNodeVisitor::setupRetrieveResult(
         }
         retrieve_result_opt_ = std::move(tmp_retrieve_result);
     } else {
+        const auto rows = OutputCast<RowVector>(result);
+        AssertInfo(!rows->childrens().empty(),
+                   "Result row vector must have at least one column");
         // load data in the result vector into retrieve_result
         tracer::AutoSpan _("Load Column Data", tracer::GetRootSpan());
-        auto column_count = result->childrens().size();
+        auto column_count = rows->childrens().size();
         tmp_retrieve_result.field_data_.resize(column_count);
         for (auto i = 0; i < column_count; i++) {
             auto column_vec =
-                std::dynamic_pointer_cast<ColumnVector>(result->child(i));
+                std::dynamic_pointer_cast<ColumnVector>(rows->child(i));
             AssertInfo(
                 column_vec,
                 "children inside row vector must be of column vector for now");
@@ -492,16 +491,10 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
 
             auto result = ExecuteTask(plan_fragment, query_context);
 
-            if (result != nullptr && !result->childrens().empty()) {
-                auto col_vec = std::dynamic_pointer_cast<ColumnVector>(
-                    result->childrens()[0]);
-                if (col_vec != nullptr) {
-                    BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
-                    // Bitset convention: bit=1 means the row is filtered OUT
-                    // (excluded). So valid rows = total active rows minus the
-                    // set bits.  Do NOT invert this subtraction.
-                    valid_count = active_count - view.count();
-                }
+            if (result != nullptr) {
+                const auto& bitmap = OutputCast<NullableBitmap>(result);
+                // A set bit excludes a row.
+                valid_count = active_count - bitmap->Data()->count();
             }
         }
         LOG_DEBUG("filter only result validCount: {}, activeCount: {}",

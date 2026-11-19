@@ -24,6 +24,7 @@
 #include "common/Types.h"
 #include "common/Vector.h"
 #include "exec/Driver.h"
+#include "common/OperatorOutput.h"
 #include "exec/Task.h"
 #include "exec/QueryContext.h"
 #include "plan/PlanNode.h"
@@ -113,14 +114,14 @@ class Operator : public std::enable_shared_from_this<Operator> {
     NeedInput() const = 0;
 
     virtual void
-    AddInput(RowVectorPtr& input) = 0;
+    AddInput(OperatorOutputPtr& input) = 0;
 
     virtual void
     NoMoreInput() {
         no_more_input_ = true;
     }
 
-    virtual RowVectorPtr
+    virtual OperatorOutputPtr
     GetOutput() = 0;
 
     virtual bool
@@ -182,7 +183,7 @@ class Operator : public std::enable_shared_from_this<Operator> {
 
     RowTypePtr output_type_;
 
-    RowVectorPtr input_;
+    OperatorOutputPtr input_;
 
     bool no_more_input_{false};
 

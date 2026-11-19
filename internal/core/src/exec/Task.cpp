@@ -157,7 +157,7 @@ Task::Terminate(TaskState state) {
     }
 }
 
-RowVectorPtr
+OperatorOutputPtr
 Task::Next(ContinueFuture* future) {
     // NOTE: Task::Next is single-threaded execution
     AssertInfo(plan_fragment_.execution_strategy_ ==
@@ -224,7 +224,7 @@ Task::Next(ContinueFuture* future) {
                 tracer::AddEvent(
                     fmt::format("driver_result_produced: driver_id={}, rows={}",
                                 i,
-                                result->childrens()[0]->size()));
+                                result->size()));
                 return result;
             }
 

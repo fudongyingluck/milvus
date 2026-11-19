@@ -52,12 +52,12 @@ PhyAggregationNode::initialize() {
 }
 
 void
-PhyAggregationNode::AddInput(RowVectorPtr& input) {
-    grouping_set_->addInput(input);
+PhyAggregationNode::AddInput(OperatorOutputPtr& input) {
+    grouping_set_->addInput(OutputCast<RowVector>(input));
     numInputRows_ += input->size();
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyAggregationNode::GetOutput() {
     if (finished_ || !no_more_input_) {
         input_ = nullptr;

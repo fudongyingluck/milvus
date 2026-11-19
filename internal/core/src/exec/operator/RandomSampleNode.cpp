@@ -63,7 +63,7 @@ PhyRandomSampleNode::PhyRandomSampleNode(
 }
 
 void
-PhyRandomSampleNode::AddInput(RowVectorPtr& input) {
+PhyRandomSampleNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
@@ -108,7 +108,7 @@ PhyRandomSampleNode::Sample(const uint32_t N, const float factor) {
     return StandardSample(N, M, gen);
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyRandomSampleNode::GetOutput() {
     auto* query_context =
         operator_context_->get_exec_context()->get_query_context();
@@ -136,10 +136,10 @@ PhyRandomSampleNode::GetOutput() {
     std::chrono::high_resolution_clock::time_point start =
         std::chrono::high_resolution_clock::now();
 
-    RowVectorPtr result = nullptr;
+    OperatorOutputPtr result = nullptr;
     if (!is_source_node_) {
-        auto input_col = GetColumnVector(input_);
-        TargetBitmapView input_data(input_col->GetRawData(), input_col->size());
+        auto input_col = OutputCast<NullableBitmap>(input_);
+        auto input_data = input_col->Data()->view();
         // note: false means the elemnt is hit
         size_t input_false_count = input_data.size() - input_data.count();
 
@@ -162,13 +162,11 @@ PhyRandomSampleNode::GetOutput() {
             }
         }
 
-        result = std::make_shared<RowVector>(
-            std::vector<VectorPtr>{std::move(input_col)});
+        result = std::move(input_col);
     } else {
-        auto sample_output = std::make_shared<ColumnVector>(
-            TargetBitmap(active_count_), TargetBitmap(active_count_));
-        TargetBitmapView data(sample_output->GetRawData(),
-                              sample_output->size());
+        auto sample_output = std::make_shared<NullableBitmap>(
+            active_count_, BitmapValue::AllZero, BitmapValue::AllZero);
+        auto data = sample_output->Data()->view();
         // true in TargetBitmap means we don't want this row, while for readability, we set the relevant row be true
         // if it's sampled. So we need to flip the bits at last.
         // However, if sample rate is larger than 0.5, we use 1-factor for sampling so that in some cases, the sampling
@@ -188,8 +186,7 @@ PhyRandomSampleNode::GetOutput() {
             data.flip();
         }
 
-        result = std::make_shared<RowVector>(
-            std::vector<VectorPtr>{std::move(sample_output)});
+        result = std::move(sample_output);
     }
 
     std::chrono::high_resolution_clock::time_point end =
@@ -200,9 +197,8 @@ PhyRandomSampleNode::GetOutput() {
         duration / 1000);
 
     if (result) {
-        auto result_col = GetColumnVector(result);
-        TargetBitmapView result_data(result_col->GetRawData(),
-                                     result_col->size());
+        auto result_col = OutputCast<NullableBitmap>(result);
+        auto result_data = result_col->Data()->view();
         auto sampled_count = result_col->size() - result_data.count();
         tracer::AddEvent(fmt::format("sampled_count: {}, total_count: {}",
                                      sampled_count,

@@ -61,7 +61,7 @@ PhyRescoresNode::PhyRescoresNode(
 };
 
 void
-PhyRescoresNode::AddInput(RowVectorPtr& input) {
+PhyRescoresNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
@@ -70,7 +70,7 @@ PhyRescoresNode::IsFinished() {
     return is_finished_;
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyRescoresNode::GetOutput() {
     ExecContext* exec_context = operator_context_->get_exec_context();
     auto query_context_ = exec_context->get_query_context();

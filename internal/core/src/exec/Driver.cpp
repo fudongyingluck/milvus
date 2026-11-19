@@ -174,7 +174,7 @@ Driver::Enqueue(std::shared_ptr<Driver> driver) {
 void
 Driver::Run(std::shared_ptr<Driver> self) {
     std::shared_ptr<BlockingState> blocking_state;
-    RowVectorPtr result;
+    OperatorOutputPtr result;
     auto reason = self->RunInternal(self, blocking_state, result);
 
     AssertInfo(result == nullptr,
@@ -278,11 +278,11 @@ Driver::Close() {
     }
 }
 
-RowVectorPtr
+OperatorOutputPtr
 Driver::Next(std::shared_ptr<BlockingState>& blocking_state) {
     auto self = shared_from_this();
 
-    RowVectorPtr result;
+    OperatorOutputPtr result;
     auto stop = RunInternal(self, blocking_state, result);
 
     Assert(stop == StopReason::kBlock || stop == StopReason::kAtEnd ||
@@ -342,7 +342,7 @@ Driver::Next(std::shared_ptr<BlockingState>& blocking_state) {
 StopReason
 Driver::RunInternal(std::shared_ptr<Driver>& self,
                     std::shared_ptr<BlockingState>& blocking_state,
-                    RowVectorPtr& result) {
+                    OperatorOutputPtr& result) {
     try {
         initializeOperators();
         if (ENABLE_DRIVER_PREFETCH.load(std::memory_order_relaxed)) {
@@ -381,7 +381,7 @@ Driver::RunInternal(std::shared_ptr<Driver>& self,
                                   next_op,
                                   "NeedInput");
                     if (needs_input) {
-                        RowVectorPtr result;
+                        OperatorOutputPtr result;
                         {
                             CALL_OPERATOR(
                                 result = op->GetOutput(), op, "GetOutput");

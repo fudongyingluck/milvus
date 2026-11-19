@@ -96,13 +96,13 @@ PhyQueryOrderByNode::PhyQueryOrderByNode(
 }
 
 void
-PhyQueryOrderByNode::AddInput(RowVectorPtr& input) {
+PhyQueryOrderByNode::AddInput(OperatorOutputPtr& input) {
     if (input == nullptr || input->size() == 0) {
         return;
     }
 
     // Extract column vectors from input RowVector
-    const auto& children = input->childrens();
+    const auto& children = OutputCast<RowVector>(input)->childrens();
     std::vector<ColumnVectorPtr> columns;
     columns.reserve(children.size());
 
@@ -145,7 +145,7 @@ PhyQueryOrderByNode::NoMoreInput() {
               sort_buffer_->NumInputRows());
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyQueryOrderByNode::GetOutput() {
     if (!no_more_input_) {
         // Haven't received all input yet

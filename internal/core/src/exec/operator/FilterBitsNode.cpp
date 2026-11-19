@@ -123,7 +123,7 @@ PhyFilterBitsNode::PhyFilterBitsNode(
 }
 
 void
-PhyFilterBitsNode::AddInput(RowVectorPtr& input) {
+PhyFilterBitsNode::AddInput(OperatorOutputPtr& input) {
     input_ = std::move(input);
 }
 
@@ -141,7 +141,7 @@ PhyFilterBitsNode::IsFinished() {
     return AllInputProcessed();
 }
 
-RowVectorPtr
+OperatorOutputPtr
 PhyFilterBitsNode::GetOutput() {
     milvus::exec::checkCancellation(query_context_);
 
@@ -185,7 +185,7 @@ PhyFilterBitsNode::GetOutput() {
         cache_segment->type() == SegmentType::Sealed &&
         ExprResCacheManager::IsEnabled();
     if (can_use_cache) {
-        RowVectorPtr cached_output;
+        OperatorOutputPtr cached_output;
         RunExprCacheBestEffort([&]() {
             auto key = ExprCacheHelper::MakeKey(
                 cache_segment,
@@ -199,12 +199,10 @@ PhyFilterBitsNode::GetOutput() {
                 return;
             }
 
-            std::vector<VectorPtr> col_res;
-            col_res.push_back(std::make_shared<ColumnVector>(
+            cached_output = std::make_shared<NullableBitmap>(
                 cached.result->clone(),
                 cached.valid_result ? cached.valid_result->clone()
-                                    : TargetBitmap(need_process_rows_, true)));
-            cached_output = std::make_shared<RowVector>(std::move(col_res));
+                                    : TargetBitmap(need_process_rows_, true));
             num_processed_rows_ = need_process_rows_;
         });
         if (cached_output != nullptr) {
@@ -214,11 +212,8 @@ PhyFilterBitsNode::GetOutput() {
             if (recording) {
                 span.SetAttribute("cache_hit", true);
                 span.SetAttribute("prefetch_wait_us", 0.0);
-                const auto cached = std::static_pointer_cast<ColumnVector>(
-                    cached_output->child(0));
-                record_result(
-                    TargetBitmapView(cached->GetRawData(), cached->size()),
-                    0.0);
+                const auto& cached = OutputCast<NullableBitmap>(cached_output);
+                record_result(cached->Data()->view(), 0.0);
             }
             return cached_output;
         }
@@ -282,8 +277,7 @@ PhyFilterBitsNode::GetOutput() {
             });
         }
 
-        std::vector<VectorPtr> col_res;
-        col_res.push_back(std::move(results_[0]));
+        auto output = col_vec->GetBitmap();
 
         std::chrono::high_resolution_clock::time_point scalar_end =
             std::chrono::high_resolution_clock::now();
@@ -294,7 +288,7 @@ PhyFilterBitsNode::GetOutput() {
             scalar_cost / 1000);
         record_result(view, scalar_cost);
 
-        return std::make_shared<RowVector>(std::move(col_res));
+        return output;
     }
 
     while (num_processed_rows_ < need_process_rows_) {
@@ -336,7 +330,7 @@ PhyFilterBitsNode::GetOutput() {
 
     // Cache write: clone bitset into ExprResCacheManager — Stage 1 of two-stage
     // search. Must clone before move since Stage 1 still owns the bitset for
-    // the ColumnVector return value below.
+    // the NullableBitmap return value below.
     if (can_use_cache) {
         RunExprCacheBestEffort([&]() {
             auto key = ExprCacheHelper::MakeKey(
@@ -353,9 +347,8 @@ PhyFilterBitsNode::GetOutput() {
     }
 
     // num_processed_rows_ = need_process_rows_;
-    std::vector<VectorPtr> col_res;
-    col_res.push_back(std::make_shared<ColumnVector>(std::move(bitset),
-                                                     std::move(valid_bitset)));
+    auto output = std::make_shared<NullableBitmap>(
+        std::move(bitset), std::move(valid_bitset));
     std::chrono::high_resolution_clock::time_point scalar_end =
         std::chrono::high_resolution_clock::now();
     double scalar_cost =
@@ -365,7 +358,7 @@ PhyFilterBitsNode::GetOutput() {
                                                                  1000);
     record_result(bitset_view, scalar_cost);
 
-    return std::make_shared<RowVector>(std::move(col_res));
+    return output;
 }
 
 }  // namespace exec

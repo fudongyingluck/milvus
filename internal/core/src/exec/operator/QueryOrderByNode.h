@@ -67,12 +67,12 @@ class PhyQueryOrderByNode : public Operator {
     }
 
     void
-    AddInput(RowVectorPtr& input) override;
+    AddInput(OperatorOutputPtr& input) override;
 
     void
     NoMoreInput() override;
 
-    RowVectorPtr
+    OperatorOutputPtr
     GetOutput() override;
 
     bool

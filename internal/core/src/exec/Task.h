@@ -97,7 +97,7 @@ class Task : public std::enable_shared_from_this<Task> {
         }
     }
 
-    RowVectorPtr
+    OperatorOutputPtr
     Next(ContinueFuture* future = nullptr);
 
     void
