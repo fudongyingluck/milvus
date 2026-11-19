@@ -17,9 +17,9 @@
 #pragma once
 
 #include <memory>
+#include <utility>
 
 #include "common/EasyAssert.h"
-#include "common/NullableBitmap.h"
 #include "common/OperatorOutput.h"
 #include "Types.h"
 #include "bitset/bitset.h"
@@ -130,19 +130,28 @@ class ColumnVector final : public SimpleVector {
     //    }
 
     // the size is the number of bits
-    // Legacy expression interface backed by NullableBitmap storage.
+    // TODO: separate the usage of bitmap from scalar field data
     ColumnVector(TargetBitmap&& bitmap, TargetBitmap&& valid_bitmap)
         : SimpleVector(DataType::INT8, bitmap.size()),
           is_bitmap_(true),
-          bitmap_(std::make_shared<NullableBitmap>(
-              std::move(bitmap), std::move(valid_bitmap))) {
+          valid_values_(std::move(valid_bitmap)) {
+        values_ = std::make_shared<FieldBitsetImpl<uint8_t>>(DataType::INT8,
+                                                             std::move(bitmap));
     }
 
-    // Expression results and operator outputs share the same bitmap owner.
-    const NullableBitmapPtr&
-    GetBitmap() const {
+    // Consume an exclusively owned bitmap column at the operator boundary.
+    // The caller must also ensure that the ColumnVector itself is not shared.
+    std::pair<TargetBitmap, TargetBitmap>
+    ReleaseBitmap() && {
         AssertInfo(is_bitmap_, "Expected a bitmap ColumnVector");
-        return bitmap_;
+        AssertInfo(values_.unique(), "Bitmap storage must be exclusively owned");
+        auto values = std::static_pointer_cast<FieldBitsetImpl<uint8_t>>(values_);
+        auto data = values->ReleaseBitmap();
+        auto validity = std::move(valid_values_);
+        valid_values_.clear();
+        length_ = 0;
+        null_count_.reset();
+        return {std::move(data), std::move(validity)};
     }
 
     ColumnVector(FieldDataPtr&& value,
@@ -187,53 +196,51 @@ class ColumnVector final : public SimpleVector {
     void
     SetValueAt(size_t index, const T& value) {
         AssertInfo(index < length_, "SetValueAt index out of range");
-        *(reinterpret_cast<T*>(GetRawData()) + index) = value;
+        *(reinterpret_cast<T*>(values_->Data()) + index) = value;
     }
 
     void
     nullAt(size_t index) {
         // Update null_count_ when setting a value to null
-        if (ValidityBitmap()[index]) {
+        if (valid_values_[index]) {
             // Was valid, now null: increment count
             null_count_ = null_count_.value_or(0) + 1;
         }
-        ValidityBitmap().set(index, false);
+        valid_values_.set(index, false);
     }
 
     void
     clearNullAt(size_t index) {
         // Update null_count_ when clearing a null value
-        if (!ValidityBitmap()[index]) {
+        if (!valid_values_[index]) {
             // Was null, now valid: decrement count
             if (null_count_.has_value()) {
                 null_count_ =
                     (null_count_.value() > 0) ? null_count_.value() - 1 : 0;
             }
         }
-        ValidityBitmap().set(index, true);
+        valid_values_.set(index, true);
     }
 
     bool
     ValidAt(size_t index) override {
-        return ValidityBitmap()[index];
+        return valid_values_[index];
     }
 
     void*
     GetRawData() const {
-        return is_bitmap_
-                   ? const_cast<TargetBitmap::data_type*>(bitmap_->Data()->data())
-                   : values_->Data();
+        return values_->Data();
     }
 
     void*
     GetValidRawData() {
-        return ValidityBitmap().data();
+        return valid_values_.data();
     }
 
     template <typename As>
     As*
     RawAsValues() const {
-        return reinterpret_cast<As*>(GetRawData());
+        return reinterpret_cast<As*>(values_->Data());
     }
 
     bool
@@ -286,8 +293,6 @@ class ColumnVector final : public SimpleVector {
 
     void
     append(const ColumnVector& other) {
-        AssertInfo(!is_bitmap_ && !other.is_bitmap_,
-                   "Bitmap results cannot be appended as scalar columns");
         // Validate that both vectors have the same type
         AssertInfo(type() == other.type(),
                    "Cannot append ColumnVector with different type: {} != {}",
@@ -348,9 +353,9 @@ class ColumnVector final : public SimpleVector {
         }
 
         const uint64_t* data =
-            reinterpret_cast<const uint64_t*>(GetRawData());
+            reinterpret_cast<const uint64_t*>(values_->Data());
         const uint64_t* valid =
-            reinterpret_cast<const uint64_t*>(ValidityBitmap().data());
+            reinterpret_cast<const uint64_t*>(valid_values_.data());
 
         const size_t num_full_words = len / 64;
         const size_t tail_bits = len % 64;
@@ -390,9 +395,9 @@ class ColumnVector final : public SimpleVector {
         }
 
         const uint64_t* data =
-            reinterpret_cast<const uint64_t*>(GetRawData());
+            reinterpret_cast<const uint64_t*>(values_->Data());
         const uint64_t* valid =
-            reinterpret_cast<const uint64_t*>(ValidityBitmap().data());
+            reinterpret_cast<const uint64_t*>(valid_values_.data());
 
         const size_t num_full_words = len / 64;
         const size_t tail_bits = len % 64;
@@ -421,21 +426,7 @@ class ColumnVector final : public SimpleVector {
     }
 
  private:
-    // Compatibility for the existing writable expression API. Read/write
-    // boundaries are unchanged by this output-container migration.
-    TargetBitmap&
-    ValidityBitmap() {
-        return is_bitmap_ ? *const_cast<TargetBitmap*>(bitmap_->Validity())
-                          : valid_values_;
-    }
-
-    const TargetBitmap&
-    ValidityBitmap() const {
-        return is_bitmap_ ? *bitmap_->Validity() : valid_values_;
-    }
-
     bool is_bitmap_;  // TODO: remove the field after implementing BitmapVector
-    NullableBitmapPtr bitmap_;
     FieldDataPtr values_;
     TargetBitmap valid_values_;  // false means the value is null
 };

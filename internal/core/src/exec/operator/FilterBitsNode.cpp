@@ -248,7 +248,7 @@ PhyFilterBitsNode::GetOutput() {
         AssertInfo(results_.size() == 1 && results_[0] != nullptr,
                    "PhyFilterBitsNode result size should be size one and not "
                    "be nullptr");
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results_[0]);
+        auto* col_vec = dynamic_cast<ColumnVector*>(results_[0].get());
         AssertInfo(col_vec && col_vec->IsBitmap(),
                    "PhyFilterBitsNode result should be bitmap ColumnVector");
 
@@ -277,7 +277,18 @@ PhyFilterBitsNode::GetOutput() {
             });
         }
 
-        auto output = col_vec->GetBitmap();
+        NullableBitmapPtr output;
+        // Move the buffers only when no expression or other consumer retains
+        // this result. col_vec borrows the object owned by results_[0].
+        if (results_[0].unique()) {
+            auto [data, validity] = std::move(*col_vec).ReleaseBitmap();
+            output = std::make_shared<NullableBitmap>(
+                std::move(data), std::move(validity));
+        } else {
+            // Preserve shared expression results rather than consuming them.
+            output = std::make_shared<NullableBitmap>(
+                TargetBitmap(view), TargetBitmap(valid_view));
+        }
 
         std::chrono::high_resolution_clock::time_point scalar_end =
             std::chrono::high_resolution_clock::now();

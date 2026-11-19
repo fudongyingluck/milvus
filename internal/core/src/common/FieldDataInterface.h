@@ -151,6 +151,17 @@ class FieldBitsetImpl : public FieldDataBase {
         Assert(cap_ >= length_);
     }
 
+    // Transfer the exclusively owned buffer back to a bitmap. Existing views
+    // remain valid only while the new bitmap owner retains its storage.
+    TargetBitmap
+    ReleaseBitmap() {
+        std::scoped_lock lck(cap_mutex_, length_mutex_);
+        auto bitmap = TargetBitmap(std::move(data_), length_);
+        cap_ = 0;
+        length_ = 0;
+        return bitmap;
+    }
+
     // FillFieldData used for read and write with storage,
     // no need to implement for bitset which used in runtime process.
     void

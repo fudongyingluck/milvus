@@ -1242,6 +1242,13 @@ class Bitset
                     : container_data_type(0)),
           Size{size} {
     }
+    // Adopt existing storage without allocating or copying its contents.
+    Bitset(container_type&& data, const size_t size)
+        : Data(std::move(data)), Size{size} {
+        range_checker::le(get_required_size_in_container_elements(size),
+                          Data.size());
+    }
+
     // Do not allow implicit copies (Rust style).
     Bitset(const Bitset&) = delete;
     // Allow default move.
